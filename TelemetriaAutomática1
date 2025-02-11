@@ -1,0 +1,159 @@
+Célula 1:
+!pip install ftfy
+!pip install opencage
+#importação das bibliotecas necessárias
+import pandas as pd
+import numpy as np
+from sklearn.cluster import DBSCAN
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
+from opencage.geocoder import OpenCageGeocode
+from google.colab import files
+import time
+# Fazer o upload do arquivo do excel
+from google.colab import files
+uploaded = files.upload()
+
+Célula 2:
+# Identificar o nome do arquivo carregado
+file_name = list(uploaded.keys())[0]
+
+# Carregar a planilha Excel
+df = pd.read_excel(file_name)
+
+# Exibir as primeiras linhas para verificar a estrutura
+df.head()
+
+Célula 3:
+# Definir um dicionário de substituição para corrigir caracteres bugados
+correcao_caracteres = {
+    "Ã¡": "á", "Ã£": "ã", "Ã¢": "â", "Ãª": "ê", "Ã©": "é", "Ã¨": "è",
+    "Ã­": "í", "Ã³": "ó", "Ãµ": "õ", "Ã´": "ô", "Ãº": "ú", "Ã§": "ç",
+    "Ã€": "À", "Ã�": "Á", "Ã‚": "Â", "Ãƒ": "Ã", "Ã„": "Ä", "Ã…": "Å",
+    "Ã‡": "Ç", "Ãˆ": "È", "Ã‰": "É", "ÃŠ": "Ê", "Ã‹": "Ë", "ÃŒ": "Ì",
+    "Ã�": "Í", "ÃŽ": "Î", "Ã‘": "Ñ", "Ã’": "Ò", "Ã“": "Ó", "Ã”": "Ô",
+    "Ã•": "Õ", "Ã–": "Ö", "Ã—": "×", "Ã˜": "Ø", "Ã™": "Ù", "Ãš": "Ú",
+    "Ã›": "Û", "Ãœ": "Ü", "Ã�": "Ý", "ÃŸ": "ß", "Ã¡": "á", "Ã¢": "â",
+    "Ã£": "ã", "Ã¤": "ä", "Ã¥": "å", "Ã¦": "æ", "Ã§": "ç", "Ã¨": "è",
+    "Ã©": "é", "Ãª": "ê", "Ã«": "ë", "Ã¬": "ì", "Ã­": "í", "Ã®": "î",
+    "Ã¯": "ï", "Ã°": "ð", "Ã±": "ñ", "Ã²": "ò", "Ã³": "ó", "Ã´": "ô",
+    "Ãµ": "õ", "Ã¶": "ö", "Ã·": "÷", "Ã¸": "ø", "Ã¹": "ù", "Ãº": "ú",
+    "Ã»": "û", "Ã¼": "ü", "Ã½": "ý", "Ã¾": "þ", "Ã¿": "ÿ"
+}
+
+def corrigir_texto(texto):
+    """Corrige caracteres bugados substituindo por letras corretas."""
+    if isinstance(texto, str):
+        for bugado, correto in correcao_caracteres.items():
+            texto = texto.replace(bugado, correto)
+    return texto
+
+# Aplicar a correção em todas as colunas do DataFrame
+df = df.applymap(lambda x: corrigir_texto(x) if isinstance(x, str) else x)
+
+# Aplicar a correção nos nomes das colunas
+df.columns = [corrigir_texto(col) for col in df.columns]
+
+# Exibir as primeiras linhas para verificar se os caracteres foram corrigidos corretamente
+df.head()
+
+Célula 4:
+# Criar um dicionário para armazenar os dataframes de cada placa
+df_por_placa = {}
+
+# Identificar a coluna que contém as placas dos veículos
+coluna_placa = "Placa" 
+
+# Criar um dataframe para cada placa
+for placa in df[coluna_placa].unique():
+    df_por_placa[placa] = df[df[coluna_placa] == placa].copy()
+
+# Exibir as placas identificadas
+df_por_placa.keys()
+
+Célula 5:
+coluna_data_hora = "Data"
+coluna_evento = "Evento"
+
+# Converter a coluna de data para datetime
+df[coluna_data_hora] = pd.to_datetime(df[coluna_data_hora], errors="coerce")
+
+horarios_por_placa = {}
+
+for placa, df_veiculo in df_por_placa.items():
+    df_veiculo = df_veiculo.sort_values(by=coluna_data_hora)
+
+    saida_casa = df_veiculo[df_veiculo[coluna_evento] == "Contato ON"][coluna_data_hora].min()
+    chegada_casa = df_veiculo[df_veiculo[coluna_evento] == "Contato OFF"][coluna_data_hora].max()
+
+    horarios_por_placa[placa] = {"Saída de Casa": saida_casa, "Chegada em Casa": chegada_casa}
+
+horarios_por_placa
+
+Célula 6:
+# Configurações de clusterização (ajuste conforme precisão do GPS)
+KM_MAX_DISTANCE = 1.0  # 1000 metros
+EPSILON = KM_MAX_DISTANCE / 6371.0088  # Conversão para radianos
+
+# Dicionário para cache de geocodificação
+locations_cache = {}
+
+api_key = "063e8fbab2374eab884c24a786864f89"    
+geolocator = OpenCageGeocode(api_key)          # Inicialização do cliente
+
+def reverse_geocode(lat, lon):
+    if (lat, lon) in locations_cache:
+        return locations_cache[(lat, lon)]
+    try:
+        result = geolocator.reverse_geocode(lat, lon)
+        locations_cache[(lat, lon)] = result[0]['formatted'] if result else "Desconhecido"
+        time.sleep(1.1)  # Respeita limite de 2500/dia
+        return locations_cache[(lat, lon)]
+    except Exception:
+        return "Erro na API"
+
+# Processamento por veículo
+for placa, df_veiculo in df_por_placa.items():
+    # Ignora eventos de casa
+    df_viagem = df_veiculo[~df_veiculo[coluna_evento].isin(["Contato ON", "Contato OFF"])]
+
+    # Clusterização
+    coords = df_viagem[['Latitude', 'Longitude']].dropna().values
+    if len(coords) == 0:
+        continue
+
+    db = DBSCAN(eps=EPSILON, min_samples=3, metric='haversine').fit(np.radians(coords))
+
+    # Identifica maior cluster (exceto ruído)
+    unique_labels, counts = np.unique(db.labels_[db.labels_ != -1], return_counts=True)
+    if len(unique_labels) == 0:
+        continue
+
+    main_cluster_idx = unique_labels[np.argmax(counts)]
+    centroide = coords[db.labels_ == main_cluster_idx].mean(axis=0)
+
+    # Geocodificação única por cluster
+    nome_local = reverse_geocode(centroide[0], centroide[1])
+
+    # Identifica eventos na mina
+    df_veiculo['na_mina'] = np.sqrt(
+        (df_veiculo['Latitude'] - centroide[0])**2 +
+        (df_veiculo['Longitude'] - centroide[1])**2
+    ) <= 0.010  # ~1000 metros
+
+    # Calcula transições
+    df_sorted = df_veiculo.sort_values(coluna_data_hora)
+    df_sorted['entrou_na_mina'] = (df_sorted['na_mina'] & ~df_sorted['na_mina'].shift(1).fillna(False))
+    df_sorted['saiu_da_mina'] = (~df_sorted['na_mina'] & df_sorted['na_mina'].shift(1).fillna(False))
+
+    # Captura horários
+    saida_casa = horarios_por_placa[placa]['Saída de Casa']
+    chegada_casa = horarios_por_placa[placa]['Chegada em Casa']
+
+    horarios_por_placa[placa].update({
+        'Chegada na Mina': df_sorted[df_sorted['entrou_na_mina'] & (df_sorted[coluna_data_hora] > saida_casa)][coluna_data_hora].min(),
+        'Saída da Mina': df_sorted[df_sorted['saiu_da_mina'] & (df_sorted[coluna_data_hora] < chegada_casa)][coluna_data_hora].max()
+    })
+
+print(f"Requisições realizadas hoje: {len(locations_cache)}")
+print(f"Limite diário: 2500 | Restante: {2500 - len(locations_cache)}")
+horarios_por_placa
